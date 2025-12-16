@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import type { Participant, RecordingState, MusicPlayerState, SpotifyTrack } from "@shared/schema";
+import lamejs from "lamejs";
 
 interface SessionData {
   id: string;
@@ -100,16 +101,35 @@ export default function Studio() {
           });
         }
       }
+      // Also add screen audio tracks if screen sharing is active
+      if (addTracks && screenStreamRef.current) {
+        const existingSenders = existingPc.getSenders();
+        const hasScreenTrack = existingSenders.some(sender => 
+          screenStreamRef.current?.getAudioTracks().some(t => t.id === sender.track?.id)
+        );
+        if (!hasScreenTrack) {
+          screenStreamRef.current.getAudioTracks().forEach(track => {
+            existingPc.addTrack(track, screenStreamRef.current!);
+          });
+        }
+      }
       return existingPc;
     }
 
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     peerConnectionsRef.current.set(remoteParticipantId, pc);
 
-    // Add local tracks to the connection if requested
+    // Add local microphone tracks to the connection if requested
     if (addTracks && mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach(track => {
         pc.addTrack(track, mediaStreamRef.current!);
+      });
+    }
+    
+    // Also add screen audio tracks if screen sharing is active
+    if (addTracks && screenStreamRef.current) {
+      screenStreamRef.current.getAudioTracks().forEach(track => {
+        pc.addTrack(track, screenStreamRef.current!);
       });
     }
 
@@ -471,9 +491,44 @@ export default function Studio() {
     const streamToRecord = mixedStreamRef.current || mediaStreamRef.current;
     if (!streamToRecord) return;
     
+    // Check if there are audio tracks
+    const audioTracks = streamToRecord.getAudioTracks();
+    if (audioTracks.length === 0) {
+      toast({
+        title: "No audio source",
+        description: "No audio source is available for recording.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
     recordedChunksRef.current = [];
     
-    const mediaRecorder = new MediaRecorder(streamToRecord);
+    // Use the best available audio MIME type for recording
+    const mimeTypes = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/ogg',
+    ];
+    
+    let selectedMimeType = '';
+    for (const mimeType of mimeTypes) {
+      if (MediaRecorder.isTypeSupported(mimeType)) {
+        selectedMimeType = mimeType;
+        break;
+      }
+    }
+    
+    const recorderOptions: MediaRecorderOptions = {
+      audioBitsPerSecond: 128000,
+    };
+    
+    if (selectedMimeType) {
+      recorderOptions.mimeType = selectedMimeType;
+    }
+    
+    const mediaRecorder = new MediaRecorder(streamToRecord, recorderOptions);
     mediaRecorderRef.current = mediaRecorder;
     
     mediaRecorder.ondataavailable = (event) => {
@@ -493,7 +548,7 @@ export default function Studio() {
     
     setRecordingState(state);
     socketRef.current?.emit("recording-state-change", { sessionId, state });
-  }, [sessionId, updateMixedStream]);
+  }, [sessionId, updateMixedStream, toast]);
 
   const handleStopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
@@ -544,7 +599,7 @@ export default function Studio() {
     socketRef.current?.emit("recording-state-change", { sessionId, state });
   }, [sessionId, recordingState]);
 
-  const handleDownload = useCallback(() => {
+  const handleDownload = useCallback(async () => {
     if (recordedChunksRef.current.length === 0) {
       toast({
         title: "No recording",
@@ -554,20 +609,113 @@ export default function Studio() {
       return;
     }
     
-    const blob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${session?.name || "recording"}-${new Date().toISOString().slice(0, 10)}.webm`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    
     toast({
-      title: "Download started",
-      description: "Your recording is being downloaded.",
+      title: "Converting to MP3",
+      description: "Please wait while we convert your recording...",
     });
+    
+    try {
+      // Create a blob from recorded chunks
+      const webmBlob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
+      
+      // Create an audio context for decoding
+      const audioContext = new AudioContext();
+      const arrayBuffer = await webmBlob.arrayBuffer();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      
+      // Get audio data
+      const sampleRate = audioBuffer.sampleRate;
+      const numChannels = audioBuffer.numberOfChannels;
+      const samples = audioBuffer.length;
+      
+      // Convert to mono if stereo
+      let leftChannel: Float32Array;
+      let rightChannel: Float32Array | null = null;
+      
+      if (numChannels === 1) {
+        leftChannel = audioBuffer.getChannelData(0);
+      } else {
+        leftChannel = audioBuffer.getChannelData(0);
+        rightChannel = audioBuffer.getChannelData(1);
+      }
+      
+      // Convert Float32Array to Int16Array for lamejs
+      const convertToInt16 = (floatArray: Float32Array): Int16Array => {
+        const int16Array = new Int16Array(floatArray.length);
+        for (let i = 0; i < floatArray.length; i++) {
+          const s = Math.max(-1, Math.min(1, floatArray[i]));
+          int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        return int16Array;
+      };
+      
+      const leftChannelInt16 = convertToInt16(leftChannel);
+      const rightChannelInt16 = rightChannel ? convertToInt16(rightChannel) : null;
+      
+      // Create MP3 encoder
+      const mp3encoder = new lamejs.Mp3Encoder(numChannels, sampleRate, 128);
+      const mp3Data: Int8Array[] = [];
+      
+      const sampleBlockSize = 1152;
+      
+      for (let i = 0; i < samples; i += sampleBlockSize) {
+        const leftChunk = leftChannelInt16.subarray(i, i + sampleBlockSize);
+        let mp3buf: Int8Array;
+        
+        if (numChannels === 2 && rightChannelInt16) {
+          const rightChunk = rightChannelInt16.subarray(i, i + sampleBlockSize);
+          mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
+        } else {
+          mp3buf = mp3encoder.encodeBuffer(leftChunk);
+        }
+        
+        if (mp3buf.length > 0) {
+          mp3Data.push(mp3buf);
+        }
+      }
+      
+      // Flush remaining data
+      const mp3buf = mp3encoder.flush();
+      if (mp3buf.length > 0) {
+        mp3Data.push(mp3buf);
+      }
+      
+      // Create MP3 blob
+      const mp3Blob = new Blob(mp3Data, { type: "audio/mp3" });
+      const url = URL.createObjectURL(mp3Blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${session?.name || "recording"}-${new Date().toISOString().slice(0, 10)}.mp3`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      await audioContext.close();
+      
+      toast({
+        title: "Download started",
+        description: "Your MP3 recording is being downloaded.",
+      });
+    } catch (err) {
+      console.error("Failed to convert to MP3:", err);
+      toast({
+        title: "Conversion failed",
+        description: "Failed to convert to MP3. Downloading as WebM instead.",
+        variant: "destructive",
+      });
+      
+      // Fallback to WebM download
+      const blob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${session?.name || "recording"}-${new Date().toISOString().slice(0, 10)}.webm`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
   }, [session, toast]);
 
   const handleToggleMute = useCallback(() => {
@@ -600,8 +748,53 @@ export default function Studio() {
     }
   }, []);
 
+  const addScreenAudioToPeers = useCallback((audioTrack: MediaStreamTrack) => {
+    peerConnectionsRef.current.forEach(async (pc, peerId) => {
+      try {
+        pc.addTrack(audioTrack, screenStreamRef.current!);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socketRef.current?.emit("webrtc-offer", {
+          sessionId,
+          fromParticipantId: currentUserIdRef.current,
+          toParticipantId: peerId,
+          offer,
+        });
+      } catch (err) {
+        console.error(`Failed to add screen audio to peer ${peerId}:`, err);
+      }
+    });
+  }, [sessionId]);
+
+  const removeScreenAudioFromPeers = useCallback(() => {
+    peerConnectionsRef.current.forEach(async (pc, peerId) => {
+      try {
+        const senders = pc.getSenders();
+        for (const sender of senders) {
+          if (sender.track && sender.track.label.includes('screen') || 
+              (screenStreamRef.current && screenStreamRef.current.getAudioTracks().some(t => t.id === sender.track?.id))) {
+            pc.removeTrack(sender);
+          }
+        }
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socketRef.current?.emit("webrtc-offer", {
+          sessionId,
+          fromParticipantId: currentUserIdRef.current,
+          toParticipantId: peerId,
+          offer,
+        });
+      } catch (err) {
+        console.error(`Failed to remove screen audio from peer ${peerId}:`, err);
+      }
+    });
+  }, [sessionId]);
+
   const handleToggleScreenCapture = useCallback(async () => {
     if (isCapturingScreen) {
+      // Remove screen audio from peer connections
+      removeScreenAudioFromPeers();
+      
       // Stop screen capture
       if (screenStreamRef.current) {
         screenStreamRef.current.getTracks().forEach(track => track.stop());
@@ -640,8 +833,12 @@ export default function Studio() {
         const audioStream = new MediaStream(audioTracks);
         screenStreamRef.current = audioStream;
         
+        // Add screen audio to all peer connections so guests can hear it
+        addScreenAudioToPeers(audioTracks[0]);
+        
         // Handle when user stops sharing via browser UI
         audioTracks[0].onended = () => {
+          removeScreenAudioFromPeers();
           screenStreamRef.current = null;
           setIsCapturingScreen(false);
           updateMixedStream();
@@ -651,7 +848,7 @@ export default function Studio() {
         updateMixedStream();
         toast({
           title: "Screen audio capturing",
-          description: "Now capturing audio from your screen/tab.",
+          description: "Now capturing audio from your screen/tab. Guests can also hear this audio.",
         });
       } catch (err) {
         console.error("Failed to capture screen audio:", err);
@@ -662,7 +859,7 @@ export default function Studio() {
         });
       }
     }
-  }, [isCapturingScreen, updateMixedStream, toast]);
+  }, [isCapturingScreen, updateMixedStream, toast, addScreenAudioToPeers, removeScreenAudioFromPeers]);
 
   const handleSearchMusic = useCallback(async (query: string) => {
     setIsSearching(true);
