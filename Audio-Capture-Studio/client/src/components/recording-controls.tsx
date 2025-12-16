@@ -18,6 +18,10 @@ interface RecordingControlsProps {
   isHost: boolean;
   isCapturingScreen: boolean;
   onToggleScreenCapture: () => void;
+  micVolume: number;
+  onMicVolumeChange: (volume: number) => void;
+  screenVolume: number;
+  onScreenVolumeChange: (volume: number) => void;
 }
 
 function formatTime(ms: number): string {
@@ -44,6 +48,10 @@ export function RecordingControls({
   isHost,
   isCapturingScreen,
   onToggleScreenCapture,
+  micVolume,
+  onMicVolumeChange,
+  screenVolume,
+  onScreenVolumeChange,
 }: RecordingControlsProps) {
   const [displayTime, setDisplayTime] = useState(0);
 
@@ -62,29 +70,54 @@ export function RecordingControls({
     <div className="fixed bottom-0 left-0 right-0 z-50 bg-card border-t border-border">
       <div className="max-w-7xl mx-auto px-4 py-4">
         <div className="flex items-center justify-between gap-6">
-          <div className="flex items-center gap-4">
-            <Button
-              variant={isMuted ? "destructive" : "secondary"}
-              size="icon"
-              onClick={onToggleMute}
-              data-testid="button-toggle-mute"
-              title={isMuted ? "Unmute microphone" : "Mute microphone"}
-            >
-              {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-            </Button>
-            
-            <Button
-              variant={isCapturingScreen ? "default" : "secondary"}
-              size="icon"
-              onClick={onToggleScreenCapture}
-              data-testid="button-toggle-screen-capture"
-              title={isCapturingScreen ? "Stop screen audio capture" : "Capture screen audio"}
-            >
-              {isCapturingScreen ? <Monitor className="h-5 w-5" /> : <MonitorOff className="h-5 w-5" />}
-            </Button>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <Button
+                variant={isMuted ? "destructive" : "secondary"}
+                size="icon"
+                onClick={onToggleMute}
+                data-testid="button-toggle-mute"
+                title={isMuted ? "Unmute microphone" : "Mute microphone"}
+              >
+                {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+              </Button>
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground">Mic</span>
+                <Slider
+                  value={[micVolume * 100]}
+                  onValueChange={([val]) => onMicVolumeChange(val / 100)}
+                  max={100}
+                  step={1}
+                  className="w-20"
+                  disabled={isMuted}
+                />
+              </div>
+            </div>
             
             <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">Input</span>
+              <Button
+                variant={isCapturingScreen ? "default" : "secondary"}
+                size="icon"
+                onClick={onToggleScreenCapture}
+                data-testid="button-toggle-screen-capture"
+                title={isCapturingScreen ? "Stop screen audio capture" : "Capture screen audio"}
+              >
+                {isCapturingScreen ? <Monitor className="h-5 w-5" /> : <MonitorOff className="h-5 w-5" />}
+              </Button>
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground">Screen</span>
+                <Slider
+                  value={[screenVolume * 100]}
+                  onValueChange={([val]) => onScreenVolumeChange(val / 100)}
+                  max={100}
+                  step={1}
+                  className="w-20"
+                  disabled={!isCapturingScreen}
+                />
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2">
               <LevelMeter level={isMuted ? 0 : masterLevel} orientation="horizontal" className="w-24" />
             </div>
           </div>

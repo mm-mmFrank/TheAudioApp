@@ -53,11 +53,15 @@ export default function Studio() {
   const [isSearching, setIsSearching] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
   const [isCapturingScreen, setIsCapturingScreen] = useState(false);
+  const [micVolume, setMicVolume] = useState(1);
+  const [screenVolume, setScreenVolume] = useState(1);
   
   const socketRef = useRef<Socket | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const micGainNodeRef = useRef<GainNode | null>(null);
+  const screenGainNodeRef = useRef<GainNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
@@ -166,16 +170,24 @@ export default function Studio() {
     const destination = audioContextRef.current.createMediaStreamDestination();
     mixerDestinationRef.current = destination;
 
-    // Add local stream
+    // Add local stream with gain control
     if (mediaStreamRef.current) {
       const localSource = audioContextRef.current.createMediaStreamSource(mediaStreamRef.current);
-      localSource.connect(destination);
+      const micGain = audioContextRef.current.createGain();
+      micGain.gain.value = micVolume;
+      micGainNodeRef.current = micGain;
+      localSource.connect(micGain);
+      micGain.connect(destination);
     }
 
-    // Add screen audio stream if capturing
+    // Add screen audio stream with gain control if capturing
     if (screenStreamRef.current) {
       const screenSource = audioContextRef.current.createMediaStreamSource(screenStreamRef.current);
-      screenSource.connect(destination);
+      const screenGain = audioContextRef.current.createGain();
+      screenGain.gain.value = screenVolume;
+      screenGainNodeRef.current = screenGain;
+      screenSource.connect(screenGain);
+      screenGain.connect(destination);
     }
 
     // Add all remote streams
@@ -185,7 +197,7 @@ export default function Studio() {
     });
 
     mixedStreamRef.current = destination.stream;
-  }, []);
+  }, [micVolume, screenVolume]);
 
   const initiateWebRTCConnection = useCallback(async (remoteParticipantId: string) => {
     if (!mediaStreamRef.current || !socketRef.current || remoteParticipantId === currentUserIdRef.current) return;
@@ -574,6 +586,20 @@ export default function Studio() {
     }
   }, [isMuted, sessionId, currentUserId]);
 
+  const handleMicVolumeChange = useCallback((volume: number) => {
+    setMicVolume(volume);
+    if (micGainNodeRef.current) {
+      micGainNodeRef.current.gain.value = volume;
+    }
+  }, []);
+
+  const handleScreenVolumeChange = useCallback((volume: number) => {
+    setScreenVolume(volume);
+    if (screenGainNodeRef.current) {
+      screenGainNodeRef.current.gain.value = volume;
+    }
+  }, []);
+
   const handleToggleScreenCapture = useCallback(async () => {
     if (isCapturingScreen) {
       // Stop screen capture
@@ -843,6 +869,10 @@ export default function Studio() {
         isHost={isHost}
         isCapturingScreen={isCapturingScreen}
         onToggleScreenCapture={handleToggleScreenCapture}
+        micVolume={micVolume}
+        onMicVolumeChange={handleMicVolumeChange}
+        screenVolume={screenVolume}
+        onScreenVolumeChange={handleScreenVolumeChange}
       />
       
       <audio ref={audioRef} className="hidden" />
