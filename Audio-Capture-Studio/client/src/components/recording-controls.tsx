@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Circle, Square, Pause, Play, Download, Mic, MicOff } from "lucide-react";
+import { Circle, Square, Pause, Play, Download, Mic, MicOff, Monitor, MonitorOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { LevelMeter } from "@/components/audio-visualizer";
@@ -16,6 +16,8 @@ interface RecordingControlsProps {
   onToggleMute: () => void;
   masterLevel: number;
   isHost: boolean;
+  isCapturingScreen: boolean;
+  onToggleScreenCapture: () => void;
 }
 
 function formatTime(ms: number): string {
@@ -40,6 +42,8 @@ export function RecordingControls({
   onToggleMute,
   masterLevel,
   isHost,
+  isCapturingScreen,
+  onToggleScreenCapture,
 }: RecordingControlsProps) {
   const [displayTime, setDisplayTime] = useState(0);
 
@@ -64,8 +68,19 @@ export function RecordingControls({
               size="icon"
               onClick={onToggleMute}
               data-testid="button-toggle-mute"
+              title={isMuted ? "Unmute microphone" : "Mute microphone"}
             >
               {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+            </Button>
+            
+            <Button
+              variant={isCapturingScreen ? "default" : "secondary"}
+              size="icon"
+              onClick={onToggleScreenCapture}
+              data-testid="button-toggle-screen-capture"
+              title={isCapturingScreen ? "Stop screen audio capture" : "Capture screen audio"}
+            >
+              {isCapturingScreen ? <Monitor className="h-5 w-5" /> : <MonitorOff className="h-5 w-5" />}
             </Button>
             
             <div className="flex items-center gap-2">

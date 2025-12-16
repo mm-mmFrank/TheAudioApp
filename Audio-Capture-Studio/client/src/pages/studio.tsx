@@ -52,9 +52,11 @@ export default function Studio() {
   const [searchResults, setSearchResults] = useState<SpotifyTrack[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [isCapturingScreen, setIsCapturingScreen] = useState(false);
   
   const socketRef = useRef<Socket | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -168,6 +170,12 @@ export default function Studio() {
     if (mediaStreamRef.current) {
       const localSource = audioContextRef.current.createMediaStreamSource(mediaStreamRef.current);
       localSource.connect(destination);
+    }
+
+    // Add screen audio stream if capturing
+    if (screenStreamRef.current) {
+      const screenSource = audioContextRef.current.createMediaStreamSource(screenStreamRef.current);
+      screenSource.connect(destination);
     }
 
     // Add all remote streams
@@ -434,6 +442,9 @@ export default function Studio() {
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       }
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
       if (audioContextRef.current) {
         audioContextRef.current.close();
       }
@@ -562,6 +573,70 @@ export default function Studio() {
       }
     }
   }, [isMuted, sessionId, currentUserId]);
+
+  const handleToggleScreenCapture = useCallback(async () => {
+    if (isCapturingScreen) {
+      // Stop screen capture
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(track => track.stop());
+        screenStreamRef.current = null;
+      }
+      setIsCapturingScreen(false);
+      updateMixedStream();
+      toast({
+        title: "Screen audio stopped",
+        description: "Screen audio capture has been stopped.",
+      });
+    } else {
+      // Start screen capture with audio
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true,
+        });
+        
+        // Check if audio track is present
+        const audioTracks = stream.getAudioTracks();
+        if (audioTracks.length === 0) {
+          stream.getTracks().forEach(track => track.stop());
+          toast({
+            title: "No audio detected",
+            description: "Please select a tab or window with audio. Make sure to check 'Share audio' option.",
+            variant: "destructive",
+          });
+          return;
+        }
+        
+        // Stop video tracks - we only need audio
+        stream.getVideoTracks().forEach(track => track.stop());
+        
+        // Create a new stream with only audio
+        const audioStream = new MediaStream(audioTracks);
+        screenStreamRef.current = audioStream;
+        
+        // Handle when user stops sharing via browser UI
+        audioTracks[0].onended = () => {
+          screenStreamRef.current = null;
+          setIsCapturingScreen(false);
+          updateMixedStream();
+        };
+        
+        setIsCapturingScreen(true);
+        updateMixedStream();
+        toast({
+          title: "Screen audio capturing",
+          description: "Now capturing audio from your screen/tab.",
+        });
+      } catch (err) {
+        console.error("Failed to capture screen audio:", err);
+        toast({
+          title: "Screen capture failed",
+          description: "Could not capture screen audio. Please try again.",
+          variant: "destructive",
+        });
+      }
+    }
+  }, [isCapturingScreen, updateMixedStream, toast]);
 
   const handleSearchMusic = useCallback(async (query: string) => {
     setIsSearching(true);
@@ -766,6 +841,8 @@ export default function Studio() {
         onToggleMute={handleToggleMute}
         masterLevel={isMuted ? 0 : audioLevel}
         isHost={isHost}
+        isCapturingScreen={isCapturingScreen}
+        onToggleScreenCapture={handleToggleScreenCapture}
       />
       
       <audio ref={audioRef} className="hidden" />
